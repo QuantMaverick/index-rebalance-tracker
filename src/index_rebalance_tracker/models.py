@@ -169,6 +169,74 @@ class UpcomingEventsFile(BaseModel):
     events: list[UpcomingEvent]
 
 
+class EventResult(BaseModel):
+    """Combined per-event payload: meta + CAR rows + liquidity + TCA.
+
+    This is the unit of analysis the dashboard renders for any single
+    addition or deletion event. ``car_observations`` may have multiple
+    rows (one per window × model); ``liquidity`` and ``tca`` are
+    null when the event was filtered out (insufficient pre-event data).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    event: IndexEvent
+    car_observations: list[CARObservation] = Field(default_factory=list)
+    liquidity: LiquidityMetrics | None = None
+    tca: TCAEstimate | None = None
+
+
+class EventsFile(BaseModel):
+    """Schema for ``output/events_<index>.json``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = SCHEMA_VERSION
+    as_of: datetime
+    index: IndexName
+    events: list[EventResult]
+
+
+class DecayFile(BaseModel):
+    """Schema for ``output/decay_<index>.json``."""
+
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
+
+    schema_version: str = SCHEMA_VERSION
+    as_of: datetime
+    index: IndexName
+    grouping: Literal["yearly", "biannual"]
+    window_label: str
+    model_used: Literal["market", "sector_matched"]
+    action: Literal["add", "delete"]
+    cohorts: list[CohortDecay]
+
+
+class TCASummaryRow(BaseModel):
+    """Annual aggregate of TCA estimates."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    year: int
+    n_events: int
+    total_demand_usd: float
+    mean_forced_bps: float
+    mean_spread_bps: float
+    mean_savings_bps: float
+
+
+class TCASummaryFile(BaseModel):
+    """Schema for ``output/tca_summary.json``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = SCHEMA_VERSION
+    as_of: datetime
+    index: IndexName
+    passive_aum_usd: float
+    annual: list[TCASummaryRow]
+
+
 class MethodologyConstants(BaseModel):
     """Schema for ``output/methodology_constants.json``.
 

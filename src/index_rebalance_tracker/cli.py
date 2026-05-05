@@ -26,6 +26,7 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.table import Table
 
+from .analysis.decay import cohort_decay
 from .analysis.event_study import run_event_study
 from .analysis.liquidity import (
     amihud_illiquidity,
@@ -37,7 +38,20 @@ from .analysis.sector_match import adv_dollars_60d
 from .analysis.tca import estimated_demand_usd, implementation_shortfall_summary
 from .data.prices import PriceCache
 from .data.sp500_history import fetch_changes, fetch_constituents
-from .models import IndexEvent, LiquidityMetrics, TCAEstimate
+from .export import (
+    annual_tca_summary,
+    build_event_results,
+    write_decay_file,
+    write_events_file,
+    write_methodology_file,
+    write_tca_summary_file,
+)
+from .models import (
+    CARObservation,
+    IndexEvent,
+    LiquidityMetrics,
+    TCAEstimate,
+)
 
 app = typer.Typer(
     add_completion=False,
@@ -365,9 +379,187 @@ def monitor(
 
 
 @app.command("build-dashboard")
-def build_dashboard() -> None:
-    """Run all analytics and write the full dashboard JSON contract. (M4)"""
-    _stub("M4")
+def build_dashboard(
+    aum_billions: Annotated[
+        float, typer.Option(help="Passive AUM in USD billions for TCA estimates.")
+    ] = 6500.0,
+    spread_days: Annotated[int, typer.Option(help="Days the spread-execution path uses.")] = 5,
+    start: Annotated[
+        str | None,
+        typer.Option(help="Filter events with effective_date >= this ISO date."),
+    ] = "2010-01-01",
+    data_dir: Annotated[Path, typer.Option(help="Where M1 wrote parquets.")] = Path("data"),
+    output_dir: Annotated[Path, typer.Option(help="Dashboard JSON output dir.")] = Path("output"),
+    market_proxy: Annotated[str, typer.Option(help="Market-return ticker.")] = "SPY",
+    cohort_grouping: Annotated[
+        str, typer.Option(help='"yearly" or "biannual" cohort buckets.')
+    ] = "yearly",
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """End-to-end runner: scrape → fetch → analyze → write dashboard JSON.
+
+    Reads M1 parquets, fetches prices for the constituent universe via
+    the cached :class:`PriceCache`, runs the M2 event study + M3
+    liquidity/TCA analysis, computes the M4 cohort decay, and writes:
+
+    * ``events_sp500.json``           — combined per-event payload
+    * ``decay_sp500.json``            — cohort-aggregated CAR
+    * ``tca_summary.json``            — annual TCA roll-up
+    * ``methodology_constants.json``  — assumptions surfaced for the dashboard
+
+    The downstream dashboard project validates each file against the
+    pydantic models in :mod:`index_rebalance_tracker.models`.
+    """
+    _setup_logging(verbose=verbose)
+    if cohort_grouping not in {"yearly", "biannual"}:
+        console.print(f"[red]Unknown cohort grouping: {cohort_grouping!r}[/red]")
+        raise typer.Exit(code=2)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    passive_aum_usd = aum_billions * 1e9
+    start_date = _parse_iso_date(start)
+
+    # ── M1 parquets ────────────────────────────────────────────────────────
+    console.print("[cyan]Loading M1 outputs…[/cyan]")
+    events_df = pd.read_parquet(data_dir / "events_sp500.parquet")
+    cons_df = pd.read_parquet(data_dir / "constituents_sp500.parquet")
+    sector_map = dict(zip(cons_df["ticker"], cons_df["gics_sector"], strict=False))
+    if start_date is not None:
+        events_df = events_df[events_df["effective_date"] >= start_date]
+    events = [IndexEvent.model_validate(row) for row in events_df.to_dict("records")]
+    events_by_id = {e.event_id: e for e in events}
+    console.print(f"  {len(events)} events × full price universe")
+
+    # ── price universe fetch ───────────────────────────────────────────────
+    console.print("[cyan]Fetching prices for universe + market proxy…[/cyan]")
+    cache = PriceCache()
+    universe_tickers = sorted({e.ticker for e in events} | set(cons_df["ticker"]))
+    price_start = (events_df["effective_date"].min() - pd.Timedelta(days=400)).date()
+    price_end = events_df["effective_date"].max() + pd.Timedelta(days=60)
+    price_end_d = price_end.date() if hasattr(price_end, "date") else price_end
+
+    market_df = cache.fetch_prices(market_proxy, price_start, price_end_d)
+    market_returns = market_df["adj_close"].pct_change().rename("r_m")
+    market_returns.index = pd.to_datetime(market_returns.index)
+
+    returns: dict[str, pd.Series] = {}
+    prices: dict[str, pd.DataFrame] = {}
+    for i, ticker in enumerate(universe_tickers):
+        if i % 50 == 0:
+            console.print(f"  fetched {i}/{len(universe_tickers)}")
+        try:
+            df = cache.fetch_prices(ticker, price_start, price_end_d)
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger(__name__).warning("price fetch failed for %s: %s", ticker, exc)
+            continue
+        if df.empty:
+            continue
+        prices[ticker] = df
+        s = df["adj_close"].pct_change()
+        s.index = pd.to_datetime(s.index)
+        returns[ticker] = s
+
+    adv_map = adv_dollars_60d(prices)
+    total_adv = sum(adv_map.values())
+    console.print(f"  ADV computed for {len(adv_map)} tickers")
+
+    # ── M2: event study ────────────────────────────────────────────────────
+    console.print("[cyan]Running event study (market + sector_matched)…[/cyan]")
+    car_obs: list[CARObservation] = run_event_study(
+        events=events,
+        returns=returns,
+        market_returns=market_returns,
+        sector_map=sector_map,
+        adv_dollars_60d=adv_map,
+        model="both",
+        pre_run_up_days=5,
+        post_drift_days=20,
+    )
+    console.print(f"  {len(car_obs)} CAR observations")
+
+    # ── M3: liquidity + TCA ────────────────────────────────────────────────
+    console.print("[cyan]Running liquidity + TCA…[/cyan]")
+    liq_rows: list[LiquidityMetrics] = []
+    tca_rows: list[TCAEstimate] = []
+    for event in events:
+        if event.ticker not in prices:
+            continue
+        df = prices[event.ticker]
+        adv_d = adv_map.get(event.ticker, 0.0)
+        recent_close = float(df["close"].iloc[-1]) if not df.empty else 0.0
+        adv_shares = adv_d / recent_close if recent_close > 0 else 0.0
+
+        liq_rows.append(
+            LiquidityMetrics(
+                event_id=event.event_id,
+                adv_60d_shares=adv_shares,
+                adv_60d_dollars=adv_d,
+                corwin_schultz_spread=_finite_or_none(corwin_schultz_spread(df)),
+                amihud_illiquidity=_finite_or_none(amihud_illiquidity(df)),
+                kyle_lambda=_finite_or_none(kyle_lambda(df, window=60)),
+            )
+        )
+        if total_adv <= 0 or adv_d <= 0:
+            continue
+        demand = estimated_demand_usd(passive_aum_usd, adv_d, total_adv)
+        vol = daily_return_vol(df, window=60)
+        if vol != vol or demand != demand:
+            continue
+        shortfall = implementation_shortfall_summary(
+            demand, adv_d, vol, spread_n_days=spread_days
+        )
+        if shortfall["forced_bps"] != shortfall["forced_bps"]:
+            continue
+        tca_rows.append(
+            TCAEstimate(
+                event_id=event.event_id,
+                passive_aum_usd=passive_aum_usd,
+                estimated_demand_usd=demand,
+                forced_execution_cost_bps=shortfall["forced_bps"],
+                spread_execution_cost_bps=shortfall["spread_bps"],
+                savings_bps=shortfall["savings_bps"],
+            )
+        )
+    console.print(f"  liquidity rows: {len(liq_rows)}, TCA rows: {len(tca_rows)}")
+
+    # ── M4: cohort decay ───────────────────────────────────────────────────
+    console.print("[cyan]Aggregating decay cohorts…[/cyan]")
+    cohorts = cohort_decay(
+        car_obs,
+        events_by_id,
+        grouping=cohort_grouping,  # type: ignore[arg-type]
+        window_label="[T-A, T-E-1]",
+        model="market",
+        action="add",
+    )
+    console.print(f"  {len(cohorts)} cohorts")
+
+    # ── write JSON contract ────────────────────────────────────────────────
+    console.print("[cyan]Writing dashboard JSON…[/cyan]")
+    event_results = build_event_results(events, car_obs, liq_rows, tca_rows)
+    write_events_file(output_dir / "events_sp500.json", index="sp500", events=event_results)
+    write_decay_file(
+        output_dir / "decay_sp500.json",
+        index="sp500",
+        cohorts=cohorts,
+        grouping=cohort_grouping,
+        window_label="[T-A, T-E-1]",
+        model_used="market",
+        action="add",
+    )
+    annual = annual_tca_summary(tca_rows, events_by_id)
+    write_tca_summary_file(
+        output_dir / "tca_summary.json",
+        index="sp500",
+        passive_aum_usd=passive_aum_usd,
+        annual=annual,
+    )
+    write_methodology_file(
+        output_dir / "methodology_constants.json",
+        passive_aum_usd=passive_aum_usd,
+        decay_cohort_grouping=cohort_grouping,
+    )
+    console.print("[green]✓ Dashboard JSON contract written.[/green]")
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────

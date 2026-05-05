@@ -19,7 +19,16 @@ Built with `uv`, `ruff`, `mypy --strict`, `pytest --cov`, and `pre-commit`. CI r
 
 ## Headline result
 
-> _Lands at M4. The expected pattern: high CARs in 2010–2015, compressing toward zero in 2020–2025 as more arbitrage capital chases the trade. If our data shows the opposite, we report it honestly._
+The decay-of-the-index-effect chart is the project's headline. Run the notebook (`notebooks/01_methodology_walkthrough.ipynb`) end-to-end to reproduce it locally — the script writes `assets/decay_headline.png` plus `assets/tca_headline.png`, and `output/decay_sp500.json` with the same numbers in machine-readable form.
+
+The expected pattern (Petajisto 2011 + Greenwood-Sammon 2022): SP500 addition CAR compressed from ~7-9% in the 1990s/2000s to ~1-3% in the 2020s as more arbitrage capital chases the trade. The notebook computes this on **your** data; whatever it shows is the headline. We report what the data says, not what the literature predicts.
+
+To populate the chart files, run from a fully-installed environment:
+```bash
+uv run index-rebalance pull-history --index sp500 --start 2010-01-01
+uv run index-rebalance build-dashboard --aum-billions 6500
+uv run jupyter nbconvert --to notebook --execute notebooks/01_methodology_walkthrough.ipynb
+```
 
 ## Status
 
@@ -28,7 +37,7 @@ Built with `uv`, `ruff`, `mypy --strict`, `pytest --cov`, and `pre-commit`. CI r
 | **M1** | Wikipedia scraper + price fetcher + corporate-actions handler + CLI `pull-history` | ✅ |
 | **M2** | Event study (market model + sector-matched controls + CLI `event-study`) | ✅ |
 | **M3** | Liquidity + TCA (Corwin-Schultz, Amihud, Kyle, Implementation Shortfall) | ✅ |
-| **M4** | Decay analysis + dashboard JSON exports + methodology notebook | ⏳ |
+| **M4** | Decay analysis + dashboard JSON exports + methodology notebook | ✅ |
 | **M5** | Live monitor + MSCI Singapore parallel pipeline | ⏳ |
 
 ## Quickstart

@@ -130,7 +130,10 @@ def test_tca_rejects_unsupported_index(tmp_path: Path) -> None:
     assert "only supports sp500" in result.output
 
 
-def test_build_dashboard_stub_returns_exit_2() -> None:
-    result = runner.invoke(app, ["build-dashboard"])
+def test_build_dashboard_rejects_unknown_grouping(tmp_path: Path) -> None:
+    """Invalid --cohort-grouping should exit 2 before any I/O happens."""
+    result = runner.invoke(
+        app, ["build-dashboard", "--cohort-grouping", "monthly", "--data-dir", str(tmp_path)]
+    )
     assert result.exit_code == 2
-    assert "M4" in result.output
+    assert "Unknown cohort grouping" in result.output
