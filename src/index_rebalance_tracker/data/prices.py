@@ -186,6 +186,15 @@ class PriceCache:
             return pd.DataFrame(columns=PRICE_COLUMNS).rename_axis("date")
         df = pd.read_parquet(path)
         df.index = pd.Index(pd.to_datetime(df.index).date, name="date")
+        # Enforce numeric dtypes — parquet round-trip from Pydantic-serialized
+        # frames sometimes preserves object dtype which breaks np.log / polyfit.
+        for col in ("open", "high", "low", "close", "adj_close"):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        if "volume" in df.columns:
+            df["volume"] = (
+                pd.to_numeric(df["volume"], errors="coerce").fillna(0).astype("int64")
+            )
         return df
 
     def _write_cache(self, ticker: str, df: pd.DataFrame) -> None:

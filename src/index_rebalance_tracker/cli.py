@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -242,9 +242,8 @@ def event_study(
 
     console.print(f"[cyan]Fetching prices for {len(events)} events + {market_proxy} proxy…[/cyan]")
     cache = PriceCache()
-    price_start = (events_df["effective_date"].min() - pd.Timedelta(days=400)).date()
-    price_end = events_df["effective_date"].max() + pd.Timedelta(days=60)
-    price_end_d = price_end.date() if hasattr(price_end, "date") else price_end
+    price_start = _to_date(events_df["effective_date"].min()) - timedelta(days=400)
+    price_end_d = _to_date(events_df["effective_date"].max()) + timedelta(days=60)
 
     market_df = cache.fetch_prices(market_proxy, price_start, price_end_d)
     market_returns = market_df["adj_close"].pct_change().rename("r_m")
@@ -327,9 +326,8 @@ def tca(
 
     cache = PriceCache()
     universe_tickers = sorted({e.ticker for e in events} | set(cons_df["ticker"]))
-    price_start = (events_df["effective_date"].min() - pd.Timedelta(days=120)).date()
-    price_end = events_df["effective_date"].max() + pd.Timedelta(days=10)
-    price_end_d = price_end.date() if hasattr(price_end, "date") else price_end
+    price_start = _to_date(events_df["effective_date"].min()) - timedelta(days=120)
+    price_end_d = _to_date(events_df["effective_date"].max()) + timedelta(days=10)
 
     console.print("[cyan]Fetching prices for universe…[/cyan]")
     prices: dict[str, pd.DataFrame] = {}
@@ -508,9 +506,8 @@ def build_dashboard(
     console.print("[cyan]Fetching prices for universe + market proxy…[/cyan]")
     cache = PriceCache()
     universe_tickers = sorted({e.ticker for e in events} | set(cons_df["ticker"]))
-    price_start = (events_df["effective_date"].min() - pd.Timedelta(days=400)).date()
-    price_end = events_df["effective_date"].max() + pd.Timedelta(days=60)
-    price_end_d = price_end.date() if hasattr(price_end, "date") else price_end
+    price_start = _to_date(events_df["effective_date"].min()) - timedelta(days=400)
+    price_end_d = _to_date(events_df["effective_date"].max()) + timedelta(days=60)
 
     market_df = cache.fetch_prices(market_proxy, price_start, price_end_d)
     market_returns = market_df["adj_close"].pct_change().rename("r_m")
@@ -643,6 +640,13 @@ def _parse_iso_date(s: str | None) -> date | None:
     if s is None:
         return None
     return date.fromisoformat(s)
+
+
+def _to_date(x: object) -> date:
+    """Normalize either ``pd.Timestamp``, ``datetime``, or ``date`` to ``date``."""
+    if isinstance(x, date) and not isinstance(x, datetime):
+        return x
+    return pd.Timestamp(x).date()  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":  # pragma: no cover
