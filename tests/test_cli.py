@@ -109,10 +109,18 @@ def test_pull_history_unknown_index_returns_exit_2(tmp_path: Path) -> None:
     assert result.exit_code == 2
 
 
-def test_event_study_stub_returns_exit_2() -> None:
-    result = runner.invoke(app, ["event-study"])
+def test_event_study_rejects_unknown_model(tmp_path: Path) -> None:
+    """Invalid --model should exit 2 before any I/O happens."""
+    result = runner.invoke(app, ["event-study", "--model", "bogus", "--data-dir", str(tmp_path)])
     assert result.exit_code == 2
-    assert "M2" in result.output
+    assert "Unknown model" in result.output
+
+
+def test_event_study_rejects_unsupported_index(tmp_path: Path) -> None:
+    """MSCI SG event-study lands in M5; reject for now."""
+    result = runner.invoke(app, ["event-study", "--index", "msci-sg", "--data-dir", str(tmp_path)])
+    assert result.exit_code == 2
+    assert "only supports sp500" in result.output
 
 
 def test_tca_stub_returns_exit_2() -> None:

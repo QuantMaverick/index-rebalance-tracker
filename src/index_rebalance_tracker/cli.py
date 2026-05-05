@@ -26,7 +26,11 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.table import Table
 
+from .analysis.event_study import run_event_study
+from .analysis.sector_match import adv_dollars_60d
+from .data.prices import PriceCache
 from .data.sp500_history import fetch_changes, fetch_constituents
+from .models import IndexEvent
 
 app = typer.Typer(
     add_completion=False,
@@ -121,14 +125,103 @@ def _stub(milestone: str) -> None:
 
 @app.command("event-study")
 def event_study(
-    index: Annotated[str, typer.Option()] = "sp500",
+    index: Annotated[str, typer.Option(help='Currently only "sp500" supported.')] = "sp500",
     window_pre: Annotated[int, typer.Option(help="Days before announcement.")] = 5,
     window_post: Annotated[int, typer.Option(help="Days after effective.")] = 20,
     model: Annotated[str, typer.Option(help='"market" | "sector_matched" | "both"')] = "both",
+    start: Annotated[
+        str | None,
+        typer.Option(help="Filter events with effective_date >= this ISO date."),
+    ] = "2010-01-01",
+    data_dir: Annotated[Path, typer.Option(help="Where M1 wrote parquets.")] = Path("data"),
+    output_dir: Annotated[Path, typer.Option(help="CAR observations output dir.")] = Path("output"),
+    market_proxy: Annotated[str, typer.Option(help="Market-return ticker.")] = "SPY",
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
-    """Run the event study and write CAR observations. (M2)"""
-    _ = (index, window_pre, window_post, model)
-    _stub("M2")
+    """Run the event study and write CAR observations.
+
+    Reads ``data/{events,constituents}_sp500.parquet`` (from
+    ``pull-history``), fetches prices for every event ticker plus the market
+    proxy via the cached :class:`PriceCache`, computes daily simple returns,
+    runs the chosen model(s), and writes a parquet of ``CARObservation``
+    rows to ``output_dir/car_<index>.parquet``.
+
+    Methodology surfaced in the output JSON contract; see
+    :mod:`index_rebalance_tracker.analysis.event_study` and the
+    Methodology page for the underlying derivations.
+    """
+    _setup_logging(verbose=verbose)
+    if index != "sp500":
+        console.print(
+            f"[yellow]event-study currently only supports sp500. (got {index!r})[/yellow]"
+        )
+        raise typer.Exit(code=2)
+    if model not in {"market", "sector_matched", "both"}:
+        console.print(f"[red]Unknown model: {model!r}[/red]")
+        raise typer.Exit(code=2)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    start_date = _parse_iso_date(start)
+
+    console.print("[cyan]Loading M1 outputs…[/cyan]")
+    events_df = pd.read_parquet(data_dir / "events_sp500.parquet")
+    cons_df = pd.read_parquet(data_dir / "constituents_sp500.parquet")
+    sector_map = dict(zip(cons_df["ticker"], cons_df["gics_sector"], strict=False))
+
+    if start_date is not None:
+        events_df = events_df[events_df["effective_date"] >= start_date]
+
+    events = [IndexEvent.model_validate(row) for row in events_df.to_dict("records")]
+    console.print(f"  {len(events)} events to study (model={model})")
+
+    console.print(f"[cyan]Fetching prices for {len(events)} events + {market_proxy} proxy…[/cyan]")
+    cache = PriceCache()
+    price_start = (events_df["effective_date"].min() - pd.Timedelta(days=400)).date()
+    price_end = events_df["effective_date"].max() + pd.Timedelta(days=60)
+    price_end_d = price_end.date() if hasattr(price_end, "date") else price_end
+
+    market_df = cache.fetch_prices(market_proxy, price_start, price_end_d)
+    market_returns = market_df["adj_close"].pct_change().rename("r_m")
+    market_returns.index = pd.to_datetime(market_returns.index)
+
+    universe_tickers = sorted({event.ticker for event in events} | set(cons_df["ticker"]))
+    returns: dict[str, pd.Series] = {}
+    prices_for_adv: dict[str, pd.DataFrame] = {}
+    for i, ticker in enumerate(universe_tickers):
+        if i % 50 == 0:
+            console.print(f"  fetched {i}/{len(universe_tickers)} tickers")
+        try:
+            df = cache.fetch_prices(ticker, price_start, price_end_d)
+        except Exception as exc:  # noqa: BLE001 — yfinance raises mixed types
+            logger = logging.getLogger(__name__)
+            logger.warning("price fetch failed for %s: %s", ticker, exc)
+            continue
+        if df.empty:
+            continue
+        prices_for_adv[ticker] = df
+        s = df["adj_close"].pct_change()
+        s.index = pd.to_datetime(s.index)
+        returns[ticker] = s
+
+    adv_map = adv_dollars_60d(prices_for_adv)
+    console.print(f"  ADV computed for {len(adv_map)} tickers")
+
+    console.print("[cyan]Running event study…[/cyan]")
+    obs = run_event_study(
+        events=events,
+        returns=returns,
+        market_returns=market_returns,
+        sector_map=sector_map,
+        adv_dollars_60d=adv_map,
+        model=model,  # type: ignore[arg-type]
+        pre_run_up_days=window_pre,
+        post_drift_days=window_post,
+    )
+    console.print(f"  {len(obs)} CAR observations")
+    out_df = pd.DataFrame([o.model_dump() for o in obs])
+    out_path = output_dir / f"car_{index}.parquet"
+    out_df.to_parquet(out_path)
+    console.print(f"  wrote {out_path}")
 
 
 @app.command("tca")
