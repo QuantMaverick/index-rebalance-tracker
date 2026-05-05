@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# uv / venv
+.venv/
+venv/
+.python-version
+
+# Tooling
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project — anchor to repo root so we don't shadow src/index_rebalance_tracker/data/
+/data/
+/output/
+.cache/
+*.parquet
+*.csv
+!tests/fixtures/**/*.csv
+# Allow .gitkeep in the gitignored data/ + output/ dirs
+!/data/.gitkeep
+!/output/.gitkeep
+
+# Notebooks: keep .ipynb but strip outputs locally
+.ipynb_checkpoints/
+
+# Secrets
+.env
+.env.local
