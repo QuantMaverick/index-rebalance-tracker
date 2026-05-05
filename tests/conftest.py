@@ -25,12 +25,17 @@ def sp500_wikipedia_html(fixtures_dir: Path) -> str:
 def block_network(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ) -> Generator[None, None, None]:
-    """Hard-block sockets in any test not marked ``@pytest.mark.network``.
+    """Hard-block sockets in any test not marked ``@pytest.mark.network``
+    or ``@pytest.mark.mock_http``.
 
-    We want to be ruthless about this: the test suite must pass offline, on a
-    plane, in CI. Live-network tests opt in explicitly.
+    The ``mock_http`` exemption exists because asyncio's event loop creates
+    internal sockets even when ``httpx.MockTransport`` intercepts all HTTP
+    traffic — those tests don't reach the wire but the runtime still needs
+    socket() to work for its self-pipe.
+
+    Live-network tests opt in explicitly via ``@pytest.mark.network``.
     """
-    if request.node.get_closest_marker("network"):
+    if request.node.get_closest_marker("network") or request.node.get_closest_marker("mock_http"):
         yield
         return
 
@@ -39,7 +44,8 @@ def block_network(
     def guarded(*args: object, **kwargs: object) -> socket.socket:
         raise RuntimeError(
             "network access blocked in unit tests. "
-            "Use a fixture or mark the test @pytest.mark.network to opt in."
+            "Use a fixture or mark the test @pytest.mark.network "
+            "(real network) or @pytest.mark.mock_http (httpx MockTransport) to opt in."
         )
 
     monkeypatch.setattr(socket, "socket", guarded)

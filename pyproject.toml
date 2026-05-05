@@ -39,6 +39,7 @@ dev = [
     "pytest>=8.2",
     "pytest-cov>=5.0",
     "pytest-mock>=3.14",
+    "pytest-asyncio>=0.23",
     "ruff>=0.5",
     "mypy>=1.10",
     "pre-commit>=3.7",
@@ -118,7 +119,9 @@ addopts = [
 ]
 markers = [
     "network: tests that hit live network (skipped by default in CI)",
+    "mock_http: tests using httpx.MockTransport — bypass the socket kill switch",
 ]
+asyncio_mode = "auto"
 
 [tool.coverage.run]
 branch = true

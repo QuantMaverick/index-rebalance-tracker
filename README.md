@@ -38,7 +38,7 @@ uv run jupyter nbconvert --to notebook --execute notebooks/01_methodology_walkth
 | **M2** | Event study (market model + sector-matched controls + CLI `event-study`) | ✅ |
 | **M3** | Liquidity + TCA (Corwin-Schultz, Amihud, Kyle, Implementation Shortfall) | ✅ |
 | **M4** | Decay analysis + dashboard JSON exports + methodology notebook | ✅ |
-| **M5** | Live monitor + MSCI Singapore parallel pipeline | ⏳ |
+| **M5** | Live monitor + MSCI Singapore parallel pipeline | ✅ |
 
 ## Quickstart
 

@@ -15,6 +15,7 @@ green-lights an empty workflow.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date
 from pathlib import Path
@@ -36,6 +37,7 @@ from .analysis.liquidity import (
 )
 from .analysis.sector_match import adv_dollars_60d
 from .analysis.tca import estimated_demand_usd, implementation_shortfall_summary
+from .data.msci_sg import discover_review_urls, fetch_msci_sg_changes
 from .data.prices import PriceCache
 from .data.sp500_history import fetch_changes, fetch_constituents
 from .export import (
@@ -52,6 +54,7 @@ from .models import (
     LiquidityMetrics,
     TCAEstimate,
 )
+from .monitor.announcements import MSCI_REVIEWS_URL, fetch_upcoming
 
 app = typer.Typer(
     add_completion=False,
@@ -96,11 +99,53 @@ def pull_history(
     if index == "sp500":
         _pull_sp500(start_date=_parse_iso_date(start), output_dir=output_dir)
     elif index == "msci-sg":
-        console.print("[yellow]MSCI Singapore scraper lands in M5.[/yellow]")
-        raise typer.Exit(code=2)
+        _pull_msci_sg(output_dir=output_dir, verbose=verbose)
     else:
         console.print(f"[red]Unknown index: {index!r}[/red]")
         raise typer.Exit(code=2)
+
+
+def _pull_msci_sg(output_dir: Path, verbose: bool) -> None:
+    """Best-effort MSCI Singapore history fetch.
+
+    The free-data path (MSCI reviews page) does not expose constituent-
+    level events. We surface what we can find and write an empty events
+    parquet with a clear warning. Production deployments should wire a
+    paid MSCI subscription here.
+    """
+    import httpx  # local import to keep cold-CLI import light
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    console.print("[cyan]Fetching MSCI reviews index…[/cyan]")
+    headers = {"User-Agent": "index-rebalance-tracker (+research)"}
+    try:
+        with httpx.Client(timeout=30.0, headers=headers, follow_redirects=True) as client:
+            resp = client.get(MSCI_REVIEWS_URL)
+            resp.raise_for_status()
+            html = resp.text
+    except (httpx.HTTPError, OSError, RuntimeError) as exc:  # noqa: BLE001
+        console.print(f"[red]MSCI fetch failed: {type(exc).__name__}: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    review_urls = discover_review_urls(html)
+    console.print(f"  found {len(review_urls)} Singapore-mentioning review links")
+    if verbose:
+        for url in review_urls:
+            console.print(f"  • {url}")
+
+    events = fetch_msci_sg_changes(html)
+    ev_df = pd.DataFrame(
+        [e.model_dump() for e in events]
+        or [{"event_id": "", "index": "", "ticker": "", "action": "", "effective_date": None}],
+    ).iloc[: len(events)]  # iloc trims the placeholder row when events is empty
+    ev_path = output_dir / "events_msci_sg.parquet"
+    ev_df.to_parquet(ev_path)
+    console.print(f"  wrote {len(ev_df)} events → {ev_path}")
+    if len(ev_df) == 0:
+        console.print(
+            "[yellow]Note: free-data MSCI scraper cannot extract ticker-level events. "
+            "See README §Limitations.[/yellow]"
+        )
 
 
 def _pull_sp500(start_date: date | None, output_dir: Path) -> None:
@@ -371,11 +416,40 @@ def _finite_or_none(x: float) -> float | None:
 
 @app.command("monitor")
 def monitor(
-    emit_json: Annotated[Path, typer.Option("--emit-json")] = Path("output/upcoming.json"),
+    emit_json: Annotated[
+        Path, typer.Option("--emit-json", help="Where to write the upcoming.json contract.")
+    ] = Path("output/upcoming.json"),
+    backward_days: Annotated[
+        int, typer.Option(help="Days back from now to include in the window.")
+    ] = 14,
+    forward_days: Annotated[
+        int, typer.Option(help="Days forward from now to include in the window.")
+    ] = 30,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
-    """Live announcement scraper. Writes upcoming.json. (M5)"""
-    _ = emit_json
-    _stub("M5")
+    """Run the live announcement scraper and write ``upcoming.json``.
+
+    Concurrent ``httpx`` async fetches for both SP500 (Wikipedia) and
+    MSCI Singapore (best-effort). One scraper failing does not block
+    the other — the output file is always written, even if it contains
+    only one source's events.
+
+    Schema is :class:`UpcomingEventsFile`. Cron-friendly: idempotent and
+    safe to run hourly.
+    """
+    _setup_logging(verbose=verbose)
+    emit_json.parent.mkdir(parents=True, exist_ok=True)
+    console.print(
+        f"[cyan]Scraping window: [{backward_days}d back, {forward_days}d forward]…[/cyan]"
+    )
+    payload = asyncio.run(fetch_upcoming(backward_days=backward_days, forward_days=forward_days))
+    emit_json.write_text(payload.model_dump_json(indent=2), encoding="utf-8")
+    console.print(f"[green]✓ wrote {len(payload.events)} upcoming events → {emit_json}[/green]")
+    if len(payload.events) == 0:
+        console.print(
+            "[yellow]Empty result is normal between announcement cycles. "
+            "Check back during the SP500 quarterly review windows (March/June/Sept/Dec).[/yellow]"
+        )
 
 
 @app.command("build-dashboard")
@@ -505,9 +579,7 @@ def build_dashboard(
         vol = daily_return_vol(df, window=60)
         if vol != vol or demand != demand:
             continue
-        shortfall = implementation_shortfall_summary(
-            demand, adv_d, vol, spread_n_days=spread_days
-        )
+        shortfall = implementation_shortfall_summary(demand, adv_d, vol, spread_n_days=spread_days)
         if shortfall["forced_bps"] != shortfall["forced_bps"]:
             continue
         tca_rows.append(
