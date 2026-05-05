@@ -27,7 +27,7 @@ Built with `uv`, `ruff`, `mypy --strict`, `pytest --cov`, and `pre-commit`. CI r
 |---|---|---|
 | **M1** | Wikipedia scraper + price fetcher + corporate-actions handler + CLI `pull-history` | ✅ |
 | **M2** | Event study (market model + sector-matched controls + CLI `event-study`) | ✅ |
-| **M3** | Liquidity + TCA (Corwin-Schultz, Amihud, Kyle, Implementation Shortfall) | ⏳ |
+| **M3** | Liquidity + TCA (Corwin-Schultz, Amihud, Kyle, Implementation Shortfall) | ✅ |
 | **M4** | Decay analysis + dashboard JSON exports + methodology notebook | ⏳ |
 | **M5** | Live monitor + MSCI Singapore parallel pipeline | ⏳ |
 

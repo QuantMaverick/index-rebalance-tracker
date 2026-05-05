@@ -123,10 +123,11 @@ def test_event_study_rejects_unsupported_index(tmp_path: Path) -> None:
     assert "only supports sp500" in result.output
 
 
-def test_tca_stub_returns_exit_2() -> None:
-    result = runner.invoke(app, ["tca"])
+def test_tca_rejects_unsupported_index(tmp_path: Path) -> None:
+    """MSCI SG TCA lands in M5; reject for now."""
+    result = runner.invoke(app, ["tca", "--index", "msci-sg", "--data-dir", str(tmp_path)])
     assert result.exit_code == 2
-    assert "M3" in result.output
+    assert "only supports sp500" in result.output
 
 
 def test_build_dashboard_stub_returns_exit_2() -> None:
