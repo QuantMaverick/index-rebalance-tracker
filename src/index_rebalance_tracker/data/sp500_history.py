@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 USER_AGENT = (
-    "index-rebalance-tracker (research; +https://github.com/QuantMaverick/index-rebalance-tracker)"
+    "index-rebalance-tracker (research; +https://github.com/jothamteo/index-rebalance-tracker)"
 )
 RATE_LIMIT_SECONDS = 1.0
 

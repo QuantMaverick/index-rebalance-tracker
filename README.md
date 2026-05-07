@@ -2,7 +2,7 @@
 
 Event-study, liquidity, and transaction-cost analytics for **S&P 500** and **MSCI Singapore Free** index rebalances. Free data sources only, fully reproducible, deterministic offline tests.
 
-[![CI](https://github.com/QuantMaverick/index-rebalance-tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/QuantMaverick/index-rebalance-tracker/actions/workflows/ci.yml)
+[![CI](https://github.com/jothamteo/index-rebalance-tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/jothamteo/index-rebalance-tracker/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -44,7 +44,7 @@ uv run jupyter nbconvert --to notebook --execute notebooks/01_methodology_walkth
 
 ```bash
 # Clone and install (uv handles Python + venv + lockfile)
-git clone https://github.com/QuantMaverick/index-rebalance-tracker
+git clone https://github.com/jothamteo/index-rebalance-tracker
 cd index-rebalance-tracker
 uv sync --all-extras
 
@@ -111,4 +111,4 @@ MIT — see [LICENSE](LICENSE).
 
 ## Contact
 
-QuantMaverick — [github.com/QuantMaverick](https://github.com/QuantMaverick)
+jothamteo — [github.com/jothamteo](https://github.com/jothamteo)
